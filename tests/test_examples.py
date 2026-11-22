@@ -517,6 +517,10 @@ def run_cross_system(juiz: str) -> bool:
 
 
 def main() -> int:
+    # juiz の出力 (木の罫線 └─ や日本語) をそのまま表示する。Windows の既定のコードページ (cp1252 や cp932) では
+    # 書けない文字があり、print が UnicodeEncodeError になるので、UTF-8 で書く
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     juiz = shutil.which("juiz")
     if juiz is None:
         print("juiz コマンドが見つかりません (README の手順でインストールしてください)", file=sys.stderr)
