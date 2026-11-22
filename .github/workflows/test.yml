@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         # PR では Linux だけ。macOS と Windows は main への push・タグ・手動実行のときだけ動かす
-        os: [ubuntu-latest, macos-latest, windows-latest] # 一時: main に workflow が無く手動実行できないので、PR で macOS・Windows も確かめる
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
