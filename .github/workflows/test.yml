@@ -1,0 +1,112 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: &docs
+      - "**.md"
+      - "LICENSE*"
+  pull_request:
+    # draft の PR では動かさず、ready for review にしたときに動かす
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: *docs
+  workflow_dispatch:
+
+# 同じブランチに続けて push したら、前の実行を止める
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # README の手順で使う juiz の版 (タグかコミット)。build.sh の JUIZ_GIT_REF と合わせる。
+  # zigjuiz を初めて配る juiz の版が公開されるまでは、juiz の main のコミットに固定し、juiz コマンドと pyjuiz も
+  # そのコミットから入れる。公開後はタグ (v<版>) にして、crates.io の juiz_app と PyPI の pyjuiz を入れる
+  JUIZ_GIT_REF: "5700911b1017e4e63f933e90a966c9352e9ece31"
+  # zigjuiz が対応する Zig の版 (0.17.x に固定)
+  ZIG_VERSION: "0.17.1"
+
+jobs:
+  examples:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        # PR では Linux だけ。macOS と Windows は main への push・タグ・手動実行のときだけ動かす
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      # juiz コマンドは Python を組み込むので、ビルドに Python の開発用ファイルが要る
+      - name: ビルドに必要なものを入れる (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y python3-dev
+          echo "PYTHON=python3" >> "$GITHUB_ENV"
+      # macOS の python3 は新しすぎて juiz コマンドの PyO3 が対応していないので、3.13 を使う。
+      # Windows も同じ版を入れる (juiz コマンドは実行時にこの Python の DLL を使う)
+      - uses: actions/setup-python@v5
+        if: runner.os != 'Linux'
+        with:
+          python-version: "3.13"
+      - name: Python のコマンドの名前 (macOS・Windows)
+        if: runner.os != 'Linux'
+        run: echo "PYTHON=python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: juiz コマンドのキャッシュ
+        id: juiz-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/juiz
+            ~/.cargo/bin/juiz.exe
+          key: juiz-app-${{ env.JUIZ_GIT_REF }}-${{ runner.os }}-${{ runner.arch }}
+      - name: juiz コマンドをインストールする
+        if: steps.juiz-cache.outputs.cache-hit != 'true'
+        run: cargo install juiz_app --git https://github.com/OpenJUIZ/juiz --rev "$JUIZ_GIT_REF" --locked
+      # データ型のサンプル (typed_pose.conf) の Python の Process が pyjuiz を使う
+      - name: pyjuiz をインストールする
+        run: $PYTHON -m pip install --user --break-system-packages "pyjuiz @ git+https://github.com/OpenJUIZ/juiz@${JUIZ_GIT_REF}#subdirectory=bindings/pyjuiz"
+      - name: libjuiz_sdk のビルド結果のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: build/juiz_sdk
+          key: juiz-sdk-${{ env.JUIZ_GIT_REF }}-${{ runner.os }}-${{ runner.arch }}
+      - name: サンプルをビルドする
+        run: ./build.sh
+      - name: サンプルを動かして結果を確かめる
+        run: $PYTHON tests/test_examples.py
+      # テストで作った .juizapp (dist/) を、タグのときに Releases に載せるため残す
+      - uses: actions/upload-artifact@v4
+        with:
+          name: juizapp-${{ matrix.os }}
+          path: dist/*.juizapp
+          if-no-files-found: error
+
+  # v* のタグを付けたときは、各 OS で作った .juizapp を Releases に載せる
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [examples]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: juizapp-*
+          path: dist
+          merge-multiple: true
+      - name: Releases に載せる
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l dist
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "サンプルのアプリの .juizapp"
+          gh release upload "$GITHUB_REF_NAME" dist/*.juizapp --clobber

@@ -1,0 +1,550 @@
+"""README のサンプルを実際に動かして結果を確かめるテスト。
+
+README の手順で juiz コマンドを入れ、`./build.sh` でサンプルをビルドしてから、
+リポジトリのルートで実行する:
+
+    python3 tests/test_examples.py
+
+各サンプルごとに `juiz -f <conf> -d` を起動し、README と同じ呼び出しを行って
+出力に期待する値が含まれるかを確かめたあと、Ctrl+C(SIGINT)で止める。
+"""
+
+import glob
+import json
+import math
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PORT = 8000
+BASE = f"http://127.0.0.1:{PORT}"
+
+# 呼び出しの代わりに (EXECUTE, ID) と書くと、HTTP の /api/process/execute を呼ぶ
+EXECUTE = "execute"
+# (PROFILE, ID) と書くと、HTTP の /api/container_process/profile で ContainerProcess の情報 (JSON) を読む
+PROFILE = "profile"
+
+# packages/talker_listener の .juizapp を juiz run したときの出力
+PACKAGE_OUTPUT = 'listener_zig: Hello, Juiz!'
+
+# サンプル共通の型 (types/geometry.jidl) の識別子。4 つのサンプルリポジトリで同じになる
+# (言語をまたいでつながる) ことを確かめるため、指紋をここに書いておく。types/geometry.jidl を変えたら
+# 4 つのリポジトリの types/geometry.jidl とこの値をそろえる
+POSE2D_ID = "examples.geometry.Pose2D@sha256:123b8c15cda217478b331e2133a5de7c5aafb8075d0ca203e8a7e7e50797cf9b"
+TWIST2D_ID = "examples.geometry.Twist2D@sha256:115b9e0f7b27c487a3af04922d19364cc387e3116468e90f22034c4f51a9fe71"
+
+# Transformations のサンプル (transformations.conf) の呼び出しの URL
+MOVE0 = f"{BASE}/container_process/move0::mobile_base_zig_move:base0"
+PAN0 = f"{BASE}/container_process/pan0::pantilt_zig_set_pan:pantilt0"
+CAMERA_POSE0 = f"{BASE}/container_process/camera_pose0::camera_zig_pose:camera0"
+
+
+class PoseNear:
+    """出力の PoseStamped (JSON) の位置が (x, y, z) に近く、基準が frame_id であること。
+
+    小数の表し方は言語によって違う (2.1 と 2.1000000000000001 など) ので、文字列ではなく数で比べる。
+    基準が Periodic の Anchor (map) のときは最大 1 周期古い値が返るので、合うまで何度か読み直す。
+    """
+
+    def __init__(self, frame_id: str, x: float, y: float, z: float):
+        self.frame_id = frame_id
+        self.position = (x, y, z)
+
+    def matches(self, stdout: str) -> bool:
+        try:
+            value = json.loads(stdout)
+        except ValueError:
+            return False
+        p = value.get("pose", {}).get("position", {})
+        return (value.get("header", {}).get("frame_id") == self.frame_id
+                and all(math.isclose(p.get(k, math.nan), v, abs_tol=1e-6) for k, v in zip("xyz", self.position)))
+
+    def __repr__(self):
+        return f"PoseNear(frame_id={self.frame_id!r}, position={self.position})"
+
+
+TRANSFORMATIONS_CASE = ("transformations.conf", [
+    # 台車を odom から見て x=1.0 に動かす。base0 に付けた Pose 通知で print0 が呼ばれる
+    (["container-process", "call", MOVE0, '{"vx": 1.0, "dt": 1.0}', "-p"], '"frame_id":"odom"'),
+    # 雲台を 90 度 (pi/2) 回す
+    (["container-process", "call", PAN0, '{"pan": 1.5707963267948966}', "-p"], '"frame_id":"base0"'),
+    # カメラは雲台の前 (x=0.05) に付いているので、回した後は台車の左 (y=0.05) にある
+    (["container", "pose", "camera0", "--reference", "odom"], PoseNear("odom", 1.1, 0.05, 0.32)),
+    # map から見ると map → odom の (1, 2, 0) が足される。map は Periodic なので少し遅れて追いつく
+    (["container", "pose", "camera0", "--reference", "map"], PoseNear("map", 2.1, 2.05, 0.32)),
+    (["container-process", "call", CAMERA_POSE0, '{"reference": "map"}', "-p"], '"frame_id":"map"'),
+    # camera_pose は読むだけなので readonly の ContainerProcess (OpenJUIZ/juiz#377)。情報に readonly が出る
+    ((PROFILE, "core://core/container_process/camera_pose0::camera_zig_pose:camera0"), '"readonly":true'),
+    (["anchor", "tree", "map"], "└─ camera0"),
+    (["container", "list", "--long"], "anchor: periodic (10 Hz)"),
+    # 3D モデル (OpenJUIZ/juiz#385)。台車は .glb、雲台は手書きの SDF、カメラは mm の .stl
+    (["container", "model", "base0", "--info"], '"format": "glb"'),
+    (["container", "model", "camera0", "--info"], '"scale": 0.001'),
+    (["container", "list", "--long"], "model: sdf"),
+    (["model", "check", "models/pantilt.sdf"], "\nOK"),
+], "pose_print_zig: x=1.00 y=0.00 yaw=0.0deg (from odom)")
+
+# System をまたぐ Transform のサンプル (transformations_map.conf と transformations_robot.conf、OpenJUIZ/juiz#417)。
+# 地図の System はポート {PORT}、ロボットの System はポート {ROBOT_PORT} で待ち受ける
+ROBOT_PORT = PORT + 1
+ROBOT = f"http://127.0.0.1:{ROBOT_PORT}"
+# ロボットの System での map の写しの ID (地図の System の map の ID をブローカー付きにしたもの)
+MAP_REPLICA = f"{BASE}/container/map::periodic_anchor"
+CROSS_SYSTEM_ROBOT_CALLS = [
+    (["container-process", "call", f"{ROBOT}/container_process/move0::mobile_base_zig_move:base0",
+      '{"vx": 1.0, "dt": 1.0}', "-p"], '"frame_id":"odom"'),
+    (["container-process", "call", f"{ROBOT}/container_process/pan0::pantilt_zig_set_pan:pantilt0",
+      '{"pan": 1.5707963267948966}', "-p"], '"frame_id":"base0"'),
+    (["-s", ROBOT, "container", "pose", "camera0", "--reference", "odom"], PoseNear("odom", 1.1, 0.05, 0.32)),
+    # ロボットの System に map は無いので、名前 map は写しに解決する。基準の ID は写しの ID
+    (["-s", ROBOT, "container", "pose", "camera0", "--reference", "map"], PoseNear(MAP_REPLICA, 2.1, 2.05, 0.32)),
+    (["container-process", "call", f"{ROBOT}/container_process/camera_pose0::camera_zig_pose:camera0",
+      '{"reference": "map"}', "-p"], '"frame_id":"map"'),  # juiz.poseStampedToValue は渡した基準の名前を frame_id にする
+    (["-s", ROBOT, "transform", "list", "--long"], "(remote: ok)"),
+    (["-s", ROBOT, "anchor", "tree", "map"], "└─ camera0"),
+    # 写しの map のモデル (床) は、ロボットの System を通して地図の System から取る (OpenJUIZ/juiz#385)
+    (["-s", ROBOT, "container", "model", f"{BASE}/container/map::periodic_anchor", "--info"],
+     '"file_name": "floor.glb"'),
+]
+CROSS_SYSTEM_MAP_CALLS = [
+    # 地図の System から、ロボットの System の camera0 を map から見て読む (ロボットの System に回る)
+    (["container", "pose", f"{ROBOT}/container/camera0::camera_zig", "--reference", "map"],
+     PoseNear("map", 2.1, 2.05, 0.32)),
+    # 地図の System の map には、ロボットの System が取りに来ている印が付く
+    (["container", "list", "--long"], "remote child: "),
+]
+CROSS_SYSTEM_OUTPUT = "pose_print_zig: x=1.00 y=0.00 yaw=0.0deg (from odom)"
+
+# (設定ファイル, [(juiz のサブコマンドと引数, 出力に含まれるべき文字列)], サーバーの出力に含まれるべき文字列)
+CASES = [
+    ("increment_process.conf", [
+        (["process", "call", f"{BASE}/process/increment0::increment_process_zig", '{"arg1": 3}', "-p"], "Value(4)"),
+    ], None),
+    ("decrement_process.conf", [
+        (["process", "call", f"{BASE}/process/decrement0::decrement_process_zig", '{"arg1": 3}', "-p"], "Value(2)"),
+    ], None),
+    ("talker_listener.conf", [], "listener_zig: Hello, Juiz!"),
+    ("example_container.conf", [
+        (["container-process", "call",
+          f"{BASE}/container_process/increment0::example_container_zig_increment:container0",
+          '{"arg1": 5}', "-p"], "Value(15)"),
+        (["container-process", "call",
+          f"{BASE}/container_process/get0::example_container_zig_get:container0", "{}", "-p"], "Value(15)"),
+    ], None),
+    ("example_component.conf", [
+        (["process", "call", f"{BASE}/process/proc0::example_component_zig_increment", '{"arg1": 1}', "-p"],
+         "Value(2)"),
+        (["container-process", "call",
+          f"{BASE}/container_process/increment0::example_component_zig_container_increment:container0",
+          '{"arg1": 5}', "-p"], "Value(105)"),
+        (["container-process", "call",
+          f"{BASE}/container_process/get0::example_component_zig_container_get:container0", "{}", "-p"],
+         "Value(105)"),
+    ], None),
+    # 同じ名前の talker0 / listener0 を robot1 と robot2 に置く。Topic もネームスペースごとに分かれる
+    ("namespace.conf", [
+        (["process", "call", f"{BASE}/process/robot1/talker0::talker_zig", '{"message": "Hi"}', "-p"],
+         "Value(\"Hi\")"),
+    ], ["listener_zig: Hello from robot1", "listener_zig: Hello from robot2"]),
+    # サンプル共通の型 (types/geometry.jidl)。Python の twist0 が出す Twist2D を Zig の move0 が受け、
+    # move0 が出す Pose2D を Python の print0 が受ける
+    ("typed_pose.conf", [
+        # execute は twist0 から速度 (linear=0.5) を取ってきて動き、結果を print0 に Push する
+        ((EXECUTE, "core://core/process/move0::pose_move_zig"), '"position":{"x":0.5,"y":0.0}'),
+        (["process", "call", f"{BASE}/process/move0::pose_move_zig",
+          '{"pose": {"position": {"x": 1.0, "y": 2.0}}, "twist": {"linear": 1.0}, "dt": 2.0}', "-p"],
+         '"position":{"x":3.0,"y":2.0}'),
+        # Zig と Python の型の指紋が同じなので、型は 1 つずつ登録される
+        (["type", "list"], POSE2D_ID),
+        (["type", "list"], TWIST2D_ID),
+        (["type", "show", "examples.geometry.Twist2D"], "used by: pose_move_zig, twist_python"),
+    ], "pose_print_python receives Pose2D(x=0.50, y=0.00, theta=0.00, frame_id=map)"),
+    # 部品の位置関係: map → odom → base0 → pantilt0 → camera0
+    TRANSFORMATIONS_CASE,
+]
+
+# juiz の出力は UTF-8。Windows の既定のコードページ (日本語なら cp932) で読むと失敗するので、UTF-8 で読む
+TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
+# 型の合わない接続 (Twist2D を Pose2D の引数へ) を書いた設定ファイル。juiz は起動せずにエラーで終わる
+MISMATCH_CONF = "typed_mismatch.conf"
+MISMATCH_ERROR = f"{TWIST2D_ID} cannot be read as {POSE2D_ID}"
+
+
+def run_call(juiz: str, args) -> tuple[int, str, str]:
+    """1 つの呼び出しを行い、(終了コード, 標準出力, 標準エラー) を返す。"""
+    if isinstance(args, tuple) and args[0] == PROFILE:
+        url = f"{BASE}/api/container_process/profile?" + urllib.parse.urlencode({"identifier": args[1]})
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                return 0, response.read().decode("utf-8"), ""
+        except OSError as e:
+            return 1, "", str(e)
+    if isinstance(args, tuple) and args[0] == EXECUTE:
+        url = f"{BASE}/api/process/execute?" + urllib.parse.urlencode({"identifier": args[1]})
+        request = urllib.request.Request(url, data=b"{}", method="PATCH",
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return 0, response.read().decode("utf-8"), ""
+        except OSError as e:
+            return 1, "", str(e)
+    result = subprocess.run([juiz, *args], cwd=ROOT, capture_output=True, timeout=30, **TEXT)
+    return result.returncode, result.stdout, result.stderr
+
+
+def generate_python_types(juiz: str) -> bool:
+    """README の手順どおり、データ型のサンプルの Python の型を gen/ に作る。"""
+    print("--- juiz idl -g python -o gen types/geometry.jidl", flush=True)
+    result = subprocess.run([juiz, "idl", "-g", "python", "-o", "gen", "types/geometry.jidl"], cwd=ROOT,
+                            capture_output=True, timeout=60, **TEXT)
+    if result.returncode != 0:
+        print(f"NG: juiz idl が失敗しました\n{result.stdout}{result.stderr}", file=sys.stderr)
+        return False
+    return True
+
+
+def run_mismatch(juiz: str) -> bool:
+    """型の合わない接続を書いた設定ファイルでは、juiz がエラーで終わること。"""
+    print(f"--- {MISMATCH_CONF}", flush=True)
+    wait_for_port_free(PORT, 30)
+    try:
+        result = subprocess.run([juiz, "-f", MISMATCH_CONF, "-d"], cwd=ROOT, capture_output=True, timeout=60,
+                                **TEXT)
+    except subprocess.TimeoutExpired:
+        print("NG: 型の合わない接続なのに juiz が起動したままです", file=sys.stderr)
+        return False
+    output = result.stdout + result.stderr
+    if result.returncode == 0 or MISMATCH_ERROR not in output:
+        print(f"NG: 型が合わないエラーになりませんでした (終了コード {result.returncode})\n{output}",
+              file=sys.stderr)
+        return False
+    print(f"  {MISMATCH_ERROR}", flush=True)
+    return True
+
+
+def wait_for_port(port: int, timeout: float, server: subprocess.Popen) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if server.poll() is not None:
+            raise RuntimeError(f"juiz が終了しました (終了コード {server.returncode})")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return
+        except OSError:
+            time.sleep(0.5)
+    raise TimeoutError(f"juiz が {timeout} 秒以内にポート {port} で待ち受けを始めませんでした")
+
+
+def wait_for_port_free(port: int, timeout: float) -> None:
+    """前の juiz が使っていたポートを再び待ち受けられるようになるまで待つ。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # HTTP の API を直接呼ぶとサーバー側に TIME_WAIT が残る。juiz と同じく SO_REUSEADDR を付けて確かめる
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("127.0.0.1", port))
+                return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
+def wait_for_output(path: str, expected: str, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            if expected in f.read():
+                return True
+        time.sleep(0.5)
+    return False
+
+
+def run_case(juiz: str, conf: str, calls: list, expected_output: str | list[str] | None) -> bool:
+    print(f"--- {conf}", flush=True)
+    wait_for_port_free(PORT, 30)
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    with tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False) as log:
+        log_path = log.name
+        # 出力をファイルに書くと Python の print がバッファされて終了まで出てこないので、バッファを切る
+        env = dict(os.environ, PYTHONUNBUFFERED="1")
+        server = subprocess.Popen([juiz, "-f", conf, "-d"], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
+                                  env=env, **kwargs)
+    ok = True
+    try:
+        wait_for_port(PORT, 60, server)
+        for args, expected in calls:
+            returncode, stdout, stderr = run_call(juiz, args)
+            # PoseNear は Periodic の Anchor の遅れを待つため、合うまで読み直す
+            for _ in range(10):
+                if not isinstance(expected, PoseNear) or (returncode == 0 and expected.matches(stdout)):
+                    break
+                time.sleep(0.5)
+                returncode, stdout, stderr = run_call(juiz, args)
+            print(f"juiz {' '.join(args)}\n  {stdout.strip()}", flush=True)
+            matched = expected.matches(stdout) if isinstance(expected, PoseNear) else expected in stdout
+            if returncode != 0 or not matched:
+                print(f"NG: {expected!r} が出力に含まれていません\n{stderr}", file=sys.stderr)
+                ok = False
+                break
+        if isinstance(expected_output, str):
+            expected_output = [expected_output]
+        for expected in expected_output or []:
+            if ok and not wait_for_output(log_path, expected, 15):
+                print(f"NG: juiz の出力に {expected!r} が含まれていません", file=sys.stderr)
+                ok = False
+
+        server.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT)
+        try:
+            server.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            print("NG: Ctrl+C で juiz が止まりませんでした", file=sys.stderr)
+            ok = False
+    except Exception as e:
+        print(f"NG: {e}", file=sys.stderr)
+        ok = False
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait()
+        if not ok:
+            with open(log_path, encoding="utf-8", errors="replace") as f:
+                print(f"juiz の出力:\n{f.read()}", file=sys.stderr)
+        os.unlink(log_path)
+    return ok
+
+
+def start_server(juiz: str, args: list, log) -> subprocess.Popen:
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    return subprocess.Popen([juiz, *args], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **kwargs)
+
+
+def stop_server(server: subprocess.Popen) -> bool:
+    server.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT)
+    try:
+        server.wait(timeout=15)
+        return True
+    except subprocess.TimeoutExpired:
+        server.kill()
+        server.wait()
+        print("NG: Ctrl+C で juiz が止まりませんでした", file=sys.stderr)
+        return False
+
+
+def run_two_namespaces(juiz: str) -> bool:
+    """README の「同じ設定ファイルを 2 つ起動する」の手順。
+
+    increment_process.conf を --namespace robot1 と robot2 で起動し、2 つ目は 1 つ目のサブシステムになる。
+    """
+    print("--- increment_process.conf --namespace robot1 / robot2", flush=True)
+    wait_for_port_free(PORT, 30)
+    wait_for_port_free(PORT + 1, 30)
+    r1 = f"{BASE}/process/robot1/increment0::increment_process_zig"
+    r2 = f"http://127.0.0.1:{PORT + 1}/process/robot2/increment0::increment_process_zig"
+    servers = []
+    logs = []
+    ok = True
+    try:
+        for ns in ["robot1", "robot2"]:
+            log = tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False)
+            logs.append(log.name)
+            servers.append(start_server(juiz, ["-f", "increment_process.conf", "--namespace", ns, "-d"], log))
+            log.close()
+            if ns == "robot1":
+                wait_for_port(PORT, 60, servers[0])
+            else:
+                wait_for_port(PORT + 1, 60, servers[1])
+        # 2 つ目の登録の手続き中に問い合わせると互いの応答待ちで止まることがある (juiz#159) ので少し待つ
+        time.sleep(3)
+        calls = [
+            (["process", "list", "--namespace", "robot2"], r2),
+            (["process", "call", r1, '{"arg1": 1}', "-p"], "Value(2)"),
+            (["process", "call", r2, '{"arg1": 10}', "-p"], "Value(11)"),
+        ]
+        for args, expected in calls:
+            result = subprocess.run([juiz, *args], cwd=ROOT, capture_output=True, timeout=60, **TEXT)
+            print(f"juiz {' '.join(args)}\n  {result.stdout.strip()}", flush=True)
+            if result.returncode != 0 or expected not in result.stdout:
+                print(f"NG: {expected!r} が出力に含まれていません\n{result.stderr}", file=sys.stderr)
+                ok = False
+                break
+    except Exception as e:
+        print(f"NG: {e}", file=sys.stderr)
+        ok = False
+    finally:
+        for server in reversed(servers):
+            if server.poll() is None and not stop_server(server):
+                ok = False
+        for path in logs:
+            if not ok:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    print(f"juiz の出力:\n{f.read()}", file=sys.stderr)
+            os.unlink(path)
+    return ok
+
+
+def run_package(juiz: str) -> bool:
+    """README の「.juizapp で配る」の手順。
+
+    scripts/make_packages.py で dist/ に talker_listener の .juizapp を作り、juiz run で起動して
+    talker_listener.conf と同じ出力になること。展開先は一時ディレクトリにする。
+    """
+    print("--- scripts/make_packages.py / juiz run", flush=True)
+    result = subprocess.run([sys.executable, "scripts/make_packages.py"], cwd=ROOT, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", timeout=120)
+    print(result.stdout.strip(), flush=True)
+    packages = glob.glob(os.path.join(ROOT, "dist", "talker_listener-0.1.0-*.juizapp"))
+    if result.returncode != 0 or len(packages) != 1:
+        print(f"NG: .juizapp を作れませんでした\n{result.stderr}", file=sys.stderr)
+        return False
+    wait_for_port_free(PORT, 30)
+    cache_dir = tempfile.mkdtemp(prefix="juiz_cache_")
+    saved = os.environ.get("JUIZ_CACHE_DIR")
+    os.environ["JUIZ_CACHE_DIR"] = cache_dir
+    log = tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False)
+    args = ["run", os.path.relpath(packages[0], ROOT)]
+    server = start_server(juiz, args, log)
+    log.close()
+    ok = True
+    try:
+        if wait_for_output(log.name, PACKAGE_OUTPUT, 60):
+            print(f"juiz {' '.join(args)}\n  {PACKAGE_OUTPUT}", flush=True)
+        else:
+            print(f"NG: juiz の出力に {PACKAGE_OUTPUT!r} が含まれていません", file=sys.stderr)
+            ok = False
+    finally:
+        if server.poll() is None and not stop_server(server):
+            ok = False
+        if not ok:
+            with open(log.name, encoding="utf-8", errors="replace") as f:
+                print(f"juiz の出力:\n{f.read()}", file=sys.stderr)
+        os.unlink(log.name)
+        if saved is None:
+            os.environ.pop("JUIZ_CACHE_DIR", None)
+        else:
+            os.environ["JUIZ_CACHE_DIR"] = saved
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    return ok
+
+
+def check_calls(juiz: str, calls: list) -> bool:
+    """呼び出しを順に行い、出力に期待する値が含まれるかを確かめる。PoseNear は合うまで読み直す。"""
+    for args, expected in calls:
+        returncode, stdout, stderr = run_call(juiz, args)
+        for _ in range(10):
+            if returncode == 0 and (expected.matches(stdout) if isinstance(expected, PoseNear)
+                                    else expected in stdout):
+                break
+            time.sleep(0.5)
+            returncode, stdout, stderr = run_call(juiz, args)
+        print(f"juiz {' '.join(args)}\n  {stdout.strip()}", flush=True)
+        matched = expected.matches(stdout) if isinstance(expected, PoseNear) else expected in stdout
+        if returncode != 0 or not matched:
+            print(f"NG: {expected!r} が出力に含まれていません\n{stderr}", file=sys.stderr)
+            return False
+    return True
+
+
+def run_cross_system(juiz: str) -> bool:
+    """README の「System をまたぐ Transform」の手順。
+
+    地図の System (transformations_map.conf) を起動してから、ロボットの System (transformations_robot.conf)
+    を起動する。ロボットの System は地図の System の map の位置を写しとして取り込むので、map から見た
+    camera0 がどちらの System からも読める。地図の System を止めると、写しは timeout の後に消える。
+    """
+    print("--- transformations_map.conf + transformations_robot.conf", flush=True)
+    wait_for_port_free(PORT, 30)
+    wait_for_port_free(ROBOT_PORT, 30)
+    servers = {}
+    logs = {}
+    ok = True
+    try:
+        for name, conf, port in [("map", "transformations_map.conf", PORT),
+                                 ("robot", "transformations_robot.conf", ROBOT_PORT)]:
+            log = tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False)
+            logs[name] = log.name
+            servers[name] = start_server(juiz, ["-f", conf, "-d"], log)
+            log.close()
+            wait_for_port(port, 60, servers[name])
+        ok = check_calls(juiz, CROSS_SYSTEM_ROBOT_CALLS) and check_calls(juiz, CROSS_SYSTEM_MAP_CALLS)
+        if ok and not wait_for_output(logs["robot"], CROSS_SYSTEM_OUTPUT, 15):
+            print(f"NG: ロボットの System の出力に {CROSS_SYSTEM_OUTPUT!r} が含まれていません", file=sys.stderr)
+            ok = False
+        # 地図の System を止めると、ロボットの System の写しは timeout (3 秒) の後に消える (Transform は残る)
+        if ok:
+            ok = stop_server(servers["map"])
+        if ok:
+            args = ["-s", ROBOT, "transform", "list", "--long"]
+            deadline = time.monotonic() + 15
+            while True:
+                returncode, stdout, stderr = run_call(juiz, args)
+                if returncode == 0 and "(remote: lost)" in stdout:
+                    print(f"juiz {' '.join(args)}\n  {stdout.strip()}", flush=True)
+                    break
+                if time.monotonic() > deadline:
+                    print(f"NG: 地図の System を止めても写しが消えません\n{stdout}{stderr}", file=sys.stderr)
+                    ok = False
+                    break
+                time.sleep(0.5)
+    except Exception as e:
+        print(f"NG: {e}", file=sys.stderr)
+        ok = False
+    finally:
+        for name in ["robot", "map"]:
+            server = servers.get(name)
+            if server is not None and server.poll() is None and not stop_server(server):
+                ok = False
+        for path in logs.values():
+            if not ok:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    print(f"juiz の出力:\n{f.read()}", file=sys.stderr)
+            os.unlink(path)
+    return ok
+
+
+def main() -> int:
+    # juiz の出力 (木の罫線 └─ や日本語) をそのまま表示する。Windows の既定のコードページ (cp1252 や cp932) では
+    # 書けない文字があり、print が UnicodeEncodeError になるので、UTF-8 で書く
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    juiz = shutil.which("juiz")
+    if juiz is None:
+        print("juiz コマンドが見つかりません (README の手順でインストールしてください)", file=sys.stderr)
+        return 1
+    if not generate_python_types(juiz):
+        return 1
+    failed = []
+    for conf, calls, expected in CASES:
+        if not run_case(juiz, conf, calls, expected):
+            failed.append(conf)
+    if not run_two_namespaces(juiz):
+        failed.append("increment_process.conf --namespace")
+    if not run_cross_system(juiz):
+        failed.append("transformations_map.conf + transformations_robot.conf")
+    if not run_mismatch(juiz):
+        failed.append(MISMATCH_CONF)
+    if not run_package(juiz):
+        failed.append("packages/talker_listener")
+    if failed:
+        print(f"失敗したサンプル: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    print("OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

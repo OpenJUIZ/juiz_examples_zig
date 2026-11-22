@@ -1,0 +1,22 @@
+.{
+    // juiz の Zig 版サンプル。zigjuiz (juiz の Zig 向けライブラリ) を使う
+    .name = .juiz_examples_zig,
+    .version = "0.1.0",
+    .fingerprint = 0xc3020a70102e69ba,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // zigjuiz を初めて配る juiz の版が公開されるまでは、build.sh が取得する juiz のソース (build/juiz) の
+        // bindings/zigjuiz を使う。公開後は Releases のアーカイブを
+        //   zig fetch --save https://github.com/OpenJUIZ/juiz/releases/download/v<版>/zigjuiz-<版>.tar.gz
+        // で取り込む形 (.url と .hash) に切り替える
+        .zigjuiz = .{ .path = "build/juiz/bindings/zigjuiz" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "process",
+        "container",
+        "component",
+        "types",
+    },
+}
