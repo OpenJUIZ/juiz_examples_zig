@@ -1,0 +1,8 @@
+# talker_listener.conf を .juizapp にしたもの。plugins/<ターゲット>/ のプラグインと libjuiz_sdk は
+# scripts/make_packages.py が build/plugins から集める
+format: 1
+name: talker_listener
+version: 0.1.0
+description: "talker_zig と listener_zig を Push でつなぐ例 (Zig)"
+license: MIT OR Apache-2.0
+entry: app.conf

@@ -1,0 +1,6 @@
+/build
+/.zig-cache
+/zig-out
+/gen
+/dist
+__pycache__/
