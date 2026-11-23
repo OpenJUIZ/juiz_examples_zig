@@ -7,9 +7,8 @@
 #   JUIZ_SOURCE_DIR を指定した場合: そのディレクトリの juiz のソースを使う
 #   指定しない場合: GitHub から JUIZ_GIT_REF の版を build/juiz に取得する
 #
-# 1. juiz のソースを build/juiz に用意する (zigjuiz を使うため。build.zig.zon がそこを参照する)。
-#    zigjuiz を初めて配る juiz の版が公開されたら、build.zig.zon を Releases のアーカイブ (zig fetch) に切り替え、
-#    この手順は要らなくなる
+# 1. juiz のソースを build/juiz に用意する (libjuiz_sdk を取得するスクリプトと、ソースからビルドするときのため)。
+#    zigjuiz は build.zig.zon に書いた juiz の Releases のアーカイブ (zigjuiz-<版>.tar.gz) を zig build が取得する
 # 2. libjuiz_sdk を用意する。JUIZ_GIT_REF がタグ (v<版>) なら、その版のアーカイブを juiz の
 #    scripts/install-juiz-sdk.sh (Windows は install-juiz-sdk.ps1) で build/juiz_sdk_archive に取得する。
 #    JUIZ_SOURCE_DIR を指定した場合、タグでない場合、JUIZ_SDK_FROM_SOURCE=1 の場合、アーカイブの取得に失敗した場合は、
@@ -22,9 +21,8 @@
 set -euo pipefail
 
 JUIZ_GIT_REPOSITORY="${JUIZ_GIT_REPOSITORY:-https://github.com/OpenJUIZ/juiz.git}"
-# 使用する juiz の版 (タグかコミット)。juiz コマンドを入れた版と合わせる。
-# zigjuiz を初めて配る版が公開されるまでは、juiz の main のコミットに固定する
-JUIZ_GIT_REF="${JUIZ_GIT_REF:-5700911b1017e4e63f933e90a966c9352e9ece31}"
+# 使用する juiz の版 (タグかコミット)。juiz コマンドを入れた版と、build.zig.zon の zigjuiz の版と合わせる
+JUIZ_GIT_REF="${JUIZ_GIT_REF:-v0.3.3}"
 JUIZ_SOURCE_DIR="${JUIZ_SOURCE_DIR:-}"
 JUIZ_SDK_FROM_SOURCE="${JUIZ_SDK_FROM_SOURCE:-}"
 ZIG="${ZIG:-zig}"
