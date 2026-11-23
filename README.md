@@ -7,7 +7,7 @@ Zig で書いた Process・Container を共有ライブラリ (プラグイン) 
 
 Rust 版は [juiz_examples_rust](https://github.com/OpenJUIZ/juiz_examples_rust)、Python 版は [juiz_examples_python](https://github.com/OpenJUIZ/juiz_examples_python)、C++ 版は [juiz_examples_cpp](https://github.com/OpenJUIZ/juiz_examples_cpp)、Haskell 版は [juiz_examples_haskell](https://github.com/OpenJUIZ/juiz_examples_haskell) にあります。
 
-> **Zig 対応はまだ公開されていない juiz の版から使えます。** zigjuiz (Zig 向けのライブラリ) を初めて配る版が公開されるまで、このリポジトリは juiz の main のコミット (`5700911`) に固定し、`juiz` コマンドもそのコミットから入れます。公開後は、公開版の `juiz` コマンドと、juiz の Releases にある `zigjuiz-<版>.tar.gz` (`zig fetch` で取り込む) に切り替えます。
+Zig は juiz 0.3.3 から使えます。
 
 ## しくみ
 
@@ -16,9 +16,9 @@ zigjuiz は Zig の関数から juiz が探す C の関数を comptime に作る
 
 このリポジトリの [build.sh](build.sh) が次のことを行います。
 
-1. GitHub から juiz のソースを `build/juiz` に取得する ([build.zig.zon](build.zig.zon) がそこの `bindings/zigjuiz` を参照する)
-2. 同じソースの juiz_sdk を `cargo build --release -p juiz_sdk` でビルドする (`JUIZ_GIT_REF` にタグ `v<版>` を指定したときは、その版の `libjuiz_sdk` のアーカイブを取得する)
-3. `zig build` でサンプルをビルドし、プラグインと `libjuiz_sdk` を `build/plugins` に並べて置く。サンプル共通の型 (`types/geometry.jidl`) は、ビルドの中で `juiz idl -g zig` が作る
+1. GitHub から juiz のソースを `build/juiz` に取得する (libjuiz_sdk を取得するスクリプトを使うため)
+2. `JUIZ_GIT_REF` の版の `libjuiz_sdk` のアーカイブを juiz の GitHub Releases から取得する (タグでない版を指定したときや、取得できなかったときは、ソースの juiz_sdk を `cargo build --release -p juiz_sdk` でビルドする)
+3. `zig build` でサンプルをビルドし (zigjuiz は [build.zig.zon](build.zig.zon) に書いた juiz の Releases の `zigjuiz-<版>.tar.gz` を `zig build` が取得する)、プラグインと `libjuiz_sdk` を `build/plugins` に並べて置く。サンプル共通の型 (`types/geometry.jidl`) は、ビルドの中で `juiz idl -g zig` が作る
 
 プラグインは zigjuiz の `installBundle` で置くので、rpath は自分と同じ場所 (`$ORIGIN`、macOS は `@loader_path`) だけです。`build/plugins` のファイルをそのまま `.juizapp` に入れられます。
 
@@ -26,7 +26,7 @@ zigjuiz は Zig の関数から juiz が探す C の関数を comptime に作る
 
 - Linux、macOS、Windows (x86_64) のいずれか。Windows では Git Bash で `./build.sh` を実行し、Rust の MSVC ツールチェーンを使います
 - **Zig 0.17.x** (zigjuiz が対応する Zig は 1 つの版に固定しています。違う版では build.sh と zigjuiz の build.zig がエラーにします)。https://ziglang.org/download/ から入れるか、`pip install ziglang==0.17.1` で入れて `ZIG="python3 -m ziglang"` を付けて実行します
-- Rust (stable)。`juiz` コマンドと libjuiz_sdk のビルドに使います。インストールは https://rustup.rs/ を参照してください
+- Rust (stable)。`juiz` コマンドのビルドに使います。インストールは https://rustup.rs/ を参照してください
 - git
 - Linux では Python の開発用ファイル (`juiz` コマンドのビルドに使います。Ubuntu なら `sudo apt install python3-dev`)
 - データ型のサンプル (`typed_pose.conf`) の Python の Process は pyjuiz を使います
@@ -34,8 +34,8 @@ zigjuiz は Zig の関数から juiz が探す C の関数を comptime に作る
 ## 1. juiz コマンドをインストールする
 
 ```sh
-cargo install juiz_app --git https://github.com/OpenJUIZ/juiz --rev 5700911b1017e4e63f933e90a966c9352e9ece31 --locked
-pip install "pyjuiz @ git+https://github.com/OpenJUIZ/juiz@5700911b1017e4e63f933e90a966c9352e9ece31#subdirectory=bindings/pyjuiz"
+cargo install juiz_app --version 0.3.3 --locked
+pip install pyjuiz==0.3.3
 ```
 
 `juiz` コマンドが `~/.cargo/bin` に入ります。
@@ -380,13 +380,13 @@ zigjuiz の書き方の詳細は juiz の [bindings/zigjuiz/README.md](https://g
 
 ### 自分のプロジェクトで使う
 
-`juiz pkg create my_robot -b zig` で、build.zig・Component のソース・conf・`.juizapp` を作るスクリプトの入った雛形を作れます (zigjuiz を初めて配る版の `juiz` コマンドから)。
+`juiz pkg create my_robot -b zig` で、build.zig・Component のソース・conf・`.juizapp` を作るスクリプトの入った雛形を作れます。
 雛形は zigjuiz を juiz の Releases から `zig fetch` で取り込み、libjuiz_sdk を `juiz sdk install` で入れます。詳しくは公式サイトの [雛形から始める (juiz pkg)](https://openjuiz.github.io/ja/guides/pkg/) を見てください。
 
 ## juiz の版について
 
-`build.sh` が取得する juiz の版は `JUIZ_GIT_REF` で決まります。既定値は juiz の main のコミット `5700911b1017e4e63f933e90a966c9352e9ece31` で、上の手順で同じコミットから入れた `juiz` コマンドと組み合わせて使います。
-別の版を使うときは、`juiz` コマンドを入れた版と合わせて指定してください。
+`build.sh` が取得する juiz の版は `JUIZ_GIT_REF` で決まります。既定値は `v0.3.3` で、上の手順で同じ版を入れた `juiz` コマンドと組み合わせて使います。
+別の版を使うときは、`juiz` コマンドを入れた版と合わせて指定し、[build.zig.zon](build.zig.zon) の zigjuiz も同じ版のアーカイブにしてください (`zig fetch --save=zigjuiz https://github.com/OpenJUIZ/juiz/releases/download/v<版>/zigjuiz-<版>.tar.gz`)。
 
 ```sh
 JUIZ_GIT_REF=<タグかコミット> ./build.sh
@@ -394,7 +394,7 @@ JUIZ_GIT_REF=<タグかコミット> ./build.sh
 
 | このリポジトリ | juiz | Zig |
 | --- | --- | --- |
-| いま | main のコミット `5700911` (zigjuiz を初めて配る版の前) | 0.17.x |
+| いま | 0.3.3 | 0.17.x |
 
 ## ライセンス
 

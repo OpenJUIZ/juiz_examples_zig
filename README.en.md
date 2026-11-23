@@ -7,7 +7,7 @@ Processes and Containers written in Zig are built as shared libraries (plugins),
 
 Examples in other languages: [Rust](https://github.com/OpenJUIZ/juiz_examples_rust), [Python](https://github.com/OpenJUIZ/juiz_examples_python), [C++](https://github.com/OpenJUIZ/juiz_examples_cpp), [Haskell](https://github.com/OpenJUIZ/juiz_examples_haskell).
 
-> **Zig support is not in a released version of juiz yet.** Until the first version that ships zigjuiz (the Zig library) is released, this repository is pinned to a commit on juiz's main branch (`5700911`), and the `juiz` command is installed from that commit too. After the release, it switches to the released `juiz` command and to `zigjuiz-<version>.tar.gz` from juiz's Releases (fetched with `zig fetch`).
+Zig is available from juiz 0.3.3.
 
 ## How it works
 
@@ -16,9 +16,9 @@ zigjuiz generates, at comptime, the C functions juiz looks for, so no runtime is
 
 [build.sh](build.sh) does the following:
 
-1. Fetches the juiz source into `build/juiz` ([build.zig.zon](build.zig.zon) refers to its `bindings/zigjuiz`)
-2. Builds juiz_sdk from that source with `cargo build --release -p juiz_sdk` (when `JUIZ_GIT_REF` is a tag `v<version>`, downloads the `libjuiz_sdk` archive of that version instead)
-3. Runs `zig build` and puts the plugins and `libjuiz_sdk` side by side in `build/plugins`. The shared types (`types/geometry.jidl`) are generated during the build by `juiz idl -g zig`
+1. Fetches the juiz source into `build/juiz` (to use its script that downloads libjuiz_sdk)
+2. Downloads the `libjuiz_sdk` archive of the `JUIZ_GIT_REF` version from juiz's GitHub Releases (when the version is not a tag, or the download fails, it builds juiz_sdk from the source with `cargo build --release -p juiz_sdk` instead)
+3. Runs `zig build` (which fetches `zigjuiz-<version>.tar.gz` from juiz's Releases, as written in [build.zig.zon](build.zig.zon)) and puts the plugins and `libjuiz_sdk` side by side in `build/plugins`. The shared types (`types/geometry.jidl`) are generated during the build by `juiz idl -g zig`
 
 The plugins are installed with zigjuiz's `installBundle`, so their rpath is only their own directory (`$ORIGIN`, `@loader_path` on macOS), and the files in `build/plugins` can go into a `.juizapp` as they are.
 
@@ -26,7 +26,7 @@ The plugins are installed with zigjuiz's `installBundle`, so their rpath is only
 
 - Linux, macOS or Windows (x86_64). On Windows, run `./build.sh` in Git Bash with Rust's MSVC toolchain
 - **Zig 0.17.x** (zigjuiz supports exactly one Zig version; build.sh and zigjuiz's build.zig stop with an error on other versions). Get it from https://ziglang.org/download/, or `pip install ziglang==0.17.1` and run with `ZIG="python3 -m ziglang"`
-- Rust (stable), to build the `juiz` command and libjuiz_sdk (https://rustup.rs/)
+- Rust (stable), to build the `juiz` command (https://rustup.rs/)
 - git
 - On Linux, Python development files to build the `juiz` command (`sudo apt install python3-dev` on Ubuntu)
 - The Python processes of the data type example (`typed_pose.conf`) use pyjuiz
@@ -34,8 +34,8 @@ The plugins are installed with zigjuiz's `installBundle`, so their rpath is only
 ## 1. Install the juiz command
 
 ```sh
-cargo install juiz_app --git https://github.com/OpenJUIZ/juiz --rev 5700911b1017e4e63f933e90a966c9352e9ece31 --locked
-pip install "pyjuiz @ git+https://github.com/OpenJUIZ/juiz@5700911b1017e4e63f933e90a966c9352e9ece31#subdirectory=bindings/pyjuiz"
+cargo install juiz_app --version 0.3.3 --locked
+pip install pyjuiz==0.3.3
 ```
 
 ## 2. Build the examples
