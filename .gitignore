@@ -4,3 +4,4 @@
 /gen
 /dist
 __pycache__/
+/zig-pkg
