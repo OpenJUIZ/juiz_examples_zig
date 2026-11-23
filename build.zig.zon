@@ -9,8 +9,8 @@
         //   zig fetch --save=zigjuiz https://github.com/OpenJUIZ/juiz/releases/download/v<版>/zigjuiz-<版>.tar.gz
         // で書き換える (build.sh の JUIZ_GIT_REF と同じ版にする)
         .zigjuiz = .{
-            .url = "https://github.com/OpenJUIZ/juiz/releases/download/v0.3.3/zigjuiz-0.3.3.tar.gz",
-            .hash = "zigjuiz-0.3.3-SU50lEGxAgBjFIwc03XXbnijfUhhlDtIQx0EAiyAT3DE",
+            .url = "https://github.com/OpenJUIZ/juiz/releases/download/v0.3.4/zigjuiz-0.3.4.tar.gz",
+            .hash = "zigjuiz-0.3.4-SU50lBrIAgAIPxnVMBCoiO5QrXYphpzDAycOYqrbhoGt",
         },
     },
     .paths = .{
