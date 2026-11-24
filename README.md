@@ -382,6 +382,7 @@ zigjuiz の書き方の詳細は juiz の [bindings/zigjuiz/README.md](https://g
 
 `juiz pkg create my_robot -b zig` で、build.zig・Component のソース・conf・`.juizapp` を作るスクリプトの入った雛形を作れます。
 雛形は zigjuiz を juiz の Releases から `zig fetch` で取り込み、libjuiz_sdk を `juiz sdk install` で入れます。詳しくは公式サイトの [雛形から始める (juiz pkg)](https://openjuiz.github.io/ja/guides/pkg/) を見てください。
+juiz 0.3.5 からは、雛形と一緒に型の設計文書 `juizdesign.yaml` もできます。先に設計文書を書いてから `juiz pkg create -d juizdesign.yaml -b zig` で雛形を作ることもできます([設計文書 (juizdesign.yaml)](https://openjuiz.github.io/ja/guides/pkg/#設計文書juizdesignyaml))。
 
 ## juiz の版について
 
