@@ -34,8 +34,8 @@ zigjuiz は Zig の関数から juiz が探す C の関数を comptime に作る
 ## 1. juiz コマンドをインストールする
 
 ```sh
-cargo install juiz_app --version 0.3.4 --locked
-pip install pyjuiz==0.3.4
+cargo install juiz_app --version 0.3.5 --locked
+pip install pyjuiz==0.3.5
 ```
 
 `juiz` コマンドが `~/.cargo/bin` に入ります。
@@ -382,10 +382,11 @@ zigjuiz の書き方の詳細は juiz の [bindings/zigjuiz/README.md](https://g
 
 `juiz pkg create my_robot -b zig` で、build.zig・Component のソース・conf・`.juizapp` を作るスクリプトの入った雛形を作れます。
 雛形は zigjuiz を juiz の Releases から `zig fetch` で取り込み、libjuiz_sdk を `juiz sdk install` で入れます。詳しくは公式サイトの [雛形から始める (juiz pkg)](https://openjuiz.github.io/ja/guides/pkg/) を見てください。
+juiz 0.3.5 からは、雛形と一緒に型の設計文書 `juizdesign.yaml` もできます。先に設計文書を書いてから `juiz pkg create -d juizdesign.yaml -b zig` で雛形を作ることもできます([設計文書 (juizdesign.yaml)](https://openjuiz.github.io/ja/guides/pkg/#設計文書juizdesignyaml))。
 
 ## juiz の版について
 
-`build.sh` が取得する juiz の版は `JUIZ_GIT_REF` で決まります。既定値は `v0.3.4` で、上の手順で同じ版を入れた `juiz` コマンドと組み合わせて使います。
+`build.sh` が取得する juiz の版は `JUIZ_GIT_REF` で決まります。既定値は `v0.3.5` で、上の手順で同じ版を入れた `juiz` コマンドと組み合わせて使います。
 別の版を使うときは、`juiz` コマンドを入れた版と合わせて指定し、[build.zig.zon](build.zig.zon) の zigjuiz も同じ版のアーカイブにしてください (`zig fetch --save=zigjuiz https://github.com/OpenJUIZ/juiz/releases/download/v<版>/zigjuiz-<版>.tar.gz`)。
 
 ```sh
@@ -394,7 +395,7 @@ JUIZ_GIT_REF=<タグかコミット> ./build.sh
 
 | このリポジトリ | juiz | Zig |
 | --- | --- | --- |
-| いま | 0.3.4 | 0.17.x |
+| いま | 0.3.5 | 0.17.x |
 
 ## ライセンス
 
