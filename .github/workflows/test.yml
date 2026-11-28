@@ -20,7 +20,7 @@ concurrency:
 
 env:
   # README の手順で使う juiz の版 (タグ)。build.sh の JUIZ_GIT_REF と build.zig.zon の zigjuiz の版と合わせる
-  JUIZ_GIT_REF: "v0.3.7"
+  JUIZ_GIT_REF: "v0.4.0"
   # zigjuiz が対応する Zig の版 (0.17.x に固定)
   ZIG_VERSION: "0.17.1"
 

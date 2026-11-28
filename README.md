@@ -34,8 +34,8 @@ zigjuiz は Zig の関数から juiz が探す C の関数を comptime に作る
 ## 1. juiz コマンドをインストールする
 
 ```sh
-cargo install juiz_app --version 0.3.7 --locked
-pip install pyjuiz==0.3.7
+cargo install juiz_app --version 0.4.0 --locked
+pip install pyjuiz==0.4.0
 ```
 
 `juiz` コマンドが `~/.cargo/bin` に入ります。
@@ -386,7 +386,7 @@ juiz 0.3.5 からは、雛形と一緒に型の設計文書 `juizdesign.yaml` �
 
 ## juiz の版について
 
-`build.sh` が取得する juiz の版は `JUIZ_GIT_REF` で決まります。既定値は `v0.3.7` で、上の手順で同じ版を入れた `juiz` コマンドと組み合わせて使います。
+`build.sh` が取得する juiz の版は `JUIZ_GIT_REF` で決まります。既定値は `v0.4.0` で、上の手順で同じ版を入れた `juiz` コマンドと組み合わせて使います。
 別の版を使うときは、`juiz` コマンドを入れた版と合わせて指定し、[build.zig.zon](build.zig.zon) の zigjuiz も同じ版のアーカイブにしてください (`zig fetch --save=zigjuiz https://github.com/OpenJUIZ/juiz/releases/download/v<版>/zigjuiz-<版>.tar.gz`)。
 
 ```sh
@@ -395,7 +395,7 @@ JUIZ_GIT_REF=<タグかコミット> ./build.sh
 
 | このリポジトリ | juiz | Zig |
 | --- | --- | --- |
-| いま | 0.3.7 | 0.17.x |
+| いま | 0.4.0 | 0.17.x |
 
 ## ライセンス
 
