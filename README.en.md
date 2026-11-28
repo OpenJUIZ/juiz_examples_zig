@@ -34,8 +34,8 @@ The plugins are installed with zigjuiz's `installBundle`, so their rpath is only
 ## 1. Install the juiz command
 
 ```sh
-cargo install juiz_app --version 0.3.7 --locked
-pip install pyjuiz==0.3.7
+cargo install juiz_app --version 0.4.0 --locked
+pip install pyjuiz==0.4.0
 ```
 
 ## 2. Build the examples
